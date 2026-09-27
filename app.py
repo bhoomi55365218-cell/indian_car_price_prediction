@@ -13,7 +13,7 @@ st.set_page_config(
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / "models" / "car_price_model.pkl"
 PIPELINE_PATH = ROOT / "models" / "car_price_pipeline.pkl"
-TRAIN_PATH = ROOT / "data" / "Cap_Training_Data_2025.csv"
+TRAIN_PATH = ROOT /"Cap_Training_Data_2025.csv"
 
 TARGET = "Price"
 DISTANCE_COL = "Distance "
@@ -85,17 +85,27 @@ def prepare_for_model(df, model):
 
         # The error in this project shows the model expects one-hot columns
         # such as Location_Bangalore, so encode only when needed.
-        one_hot_expected = any(
-            any(c + "_" in expected_name for c in categorical_cols)
-            for expected_name in expected
-        )
+       # Check whether the model expects one-hot encoded columns
+one_hot_expected = any(
+    any(c + "_" in expected_name for c in categorical_cols)
+    for expected_name in expected
+)
 
-        if one_hot_expected:
-            df = pd.get_dummies(
-                df,
-                columns=categorical_cols,
-                dtype=int
-            )
+if one_hot_expected:
+    # Convert categorical columns into one-hot encoded columns
+    df = pd.get_dummies(
+        df,
+        columns=categorical_cols,
+        drop_first=False
+    )
+
+    # Make sure all model features exist
+    for col in expected:
+        if col not in df.columns:
+            df[col] = 0
+
+    # Keep only the features expected by the model
+    df = df[expected]
 
         # Make exact feature names and order match the training model.
         df = df.reindex(columns=expected, fill_value=0)
@@ -117,8 +127,8 @@ model = load_model()
 train = load_training_data()
 
 if train is None:
-    st.error("Training CSV not found.")
-    st.code("data/Cap_Training_Data_2025.csv")
+    st.error("Training CSV found.")
+    st.code("Cap_Training_Data_2025.csv")
     st.stop()
 
 if model is None:
