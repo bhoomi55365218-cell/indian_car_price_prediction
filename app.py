@@ -1,4 +1,5 @@
 import joblib
+import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -10,14 +11,15 @@ st.set_page_config(
     layout="wide"
 )
 
-ROOT = Path(__file__).resolve().parents
-MODEL_PATH = ROOT / "models" / "car_price_model.pkl"
-PIPELINE_PATH = ROOT / "models" / "car_price_pipeline.pkl"
-TRAIN_PATH = ROOT / "data" / "Cap_Training_Data_2025.csv"
+# Project root
+ROOT = Path(__file__).resolve().parent
+
+# Files are currently in the GitHub repository root
+MODEL_PATH = ROOT / "car_price_model_small.pkl"
+TRAIN_PATH = ROOT / "Cap_Training_Data_2025.csv"
 
 TARGET = "Price"
 DISTANCE_COL = "Distance "
-
 
 @st.cache_resource
 def load_model():
