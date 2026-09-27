@@ -4,417 +4,482 @@ import pandas as pd
 import streamlit as st
 from pathlib import Path
 
+# ---------------------------------------------------------
+# STREAMLIT CONFIG
+# ---------------------------------------------------------
 st.set_page_config(
-    page_title="Indian Car Price Predictor",
+    page_title="Indian Pre-Owned Car Price Prediction",
     page_icon="🚗",
     layout="wide"
 )
 
-ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = ROOT / "models" / "car_price_model.pkl"
-PIPELINE_PATH = ROOT / "models" / "car_price_pipeline.pkl"
-TRAIN_PATH = ROOT /"Cap_Training_Data_2025.csv"
+# ---------------------------------------------------------
+# FILE PATH
+# ---------------------------------------------------------
+ROOT = Path(__file__).resolve().parent
+MODEL_PATH = ROOT / "car_price_model_small.pkl"
 
-TARGET = "Price"
-DISTANCE_COL = "Distance "
-
-
+# ---------------------------------------------------------
+# LOAD MODEL
+# ---------------------------------------------------------
 @st.cache_resource
 def load_model():
-    # Prefer the pipeline if one exists; otherwise use the existing model.
-    if PIPELINE_PATH.exists():
-        return joblib.load(PIPELINE_PATH)
-    if MODEL_PATH.exists():
-        return joblib.load(MODEL_PATH)
-    return None
-
-
-@st.cache_data
-def load_training_data():
-    if not TRAIN_PATH.exists():
+    if not MODEL_PATH.exists():
         return None
-    return pd.read_csv(TRAIN_PATH)
+    return joblib.load(MODEL_PATH)
 
-
-def build_input_row(train_df, values):
-    feature_cols = [c for c in train_df.columns if c != TARGET]
-    row = {c: np.nan for c in feature_cols}
-
-    if "ID" in row:
-        row["ID"] = int(train_df["ID"].median())
-
-    for key, value in values.items():
-        if key in row:
-            row[key] = value
-
-    return pd.DataFrame([row], columns=feature_cols)
-
-
-def prepare_for_model(df, model):
-    """
-    Match the input data to the feature representation used by the
-    saved model. This handles models trained after pd.get_dummies().
-    """
-    df = df.copy()
-
-    # Dataset has a trailing space in this column name.
-    if "Distance" in df.columns and DISTANCE_COL not in df.columns:
-        df = df.rename(columns={"Distance": DISTANCE_COL})
-
-    if TARGET in df.columns:
-        df = df.drop(columns=[TARGET])
-
-    categorical_cols = [
-        "Maker",
-        "model",
-        "Location",
-        "Owner Type",
-        "body_type",
-        "transmission",
-        "fuel_type"
-    ]
-
-    categorical_cols = [c for c in categorical_cols if c in df.columns]
-
-    # If the saved model expects raw columns, don't one-hot encode.
-    if hasattr(model, "feature_names_in_"):
-        expected = list(model.feature_names_in_)
-        expected_set = set(expected)
-
-        raw_present = any(c in expected_set for c in categorical_cols)
-
-        # The error in this project shows the model expects one-hot columns
-        # such as Location_Bangalore, so encode only when needed.
-       # Check whether the model expects one-hot encoded columns
-one_hot_expected = any(
-    any(c + "_" in expected_name for c in categorical_cols)
-    for expected_name in expected
-)
-
-if one_hot_expected:
-    # Convert categorical columns into one-hot encoded columns
-    df = pd.get_dummies(
-        df,
-        columns=categorical_cols,
-        drop_first=False
-    )
-
-    # Make sure all model features exist
-    for col in expected:
-        if col not in df.columns:
-            df[col] = 0
-
-    # Keep only the features expected by the model
-    df = df[expected]
-
-        # Make exact feature names and order match the training model.
-        df = df.reindex(columns=expected, fill_value=0)
-
-        return df
-
-    # Fallback for models without feature_names_in_
-    return pd.get_dummies(
-        df,
-        columns=categorical_cols,
-        dtype=int
-    )
-
-
-st.title("🚗 Indian Pre-Owned Car Price Prediction")
-st.write("Enter the car details to estimate its market price.")
 
 model = load_model()
-train = load_training_data()
-
-if train is None:
-    st.error("Training CSV found.")
-    st.code("Cap_Training_Data_2025.csv")
-    st.stop()
 
 if model is None:
-    st.warning(
-        "Model file not found. Put car_price_model.pkl or "
-        "car_price_pipeline.pkl inside the models folder."
+    st.error(
+        "Model file not found: car_price_model_small.pkl"
+    )
+    st.stop()
+
+# ---------------------------------------------------------
+# MODEL FEATURES
+# ---------------------------------------------------------
+if not hasattr(model, "feature_names_in_"):
+    st.error(
+        "The saved model does not contain feature_names_in_. "
+        "Please use the same model file that worked in Colab."
+    )
+    st.stop()
+
+expected_features = list(model.feature_names_in_)
+
+# ---------------------------------------------------------
+# COLUMNS IN ORIGINAL DATASET
+# ---------------------------------------------------------
+categorical_bases = [
+    "Maker",
+    "model",
+    "Location",
+    "Owner Type",
+    "body_type",
+    "transmission",
+    "fuel_type"
+]
+
+numeric_features = [
+    "ID",
+    "Distance ",
+    "manufacture_year",
+    "Age of car",
+    "engine_displacement",
+    "engine_power",
+    "Vroom Audit Rating",
+    "door_count",
+    "seat_count"
+]
+
+# ---------------------------------------------------------
+# GET CATEGORIES FROM ONE-HOT ENCODED MODEL FEATURES
+# ---------------------------------------------------------
+def get_categories(base_name):
+    prefix = base_name + "_"
+    values = []
+
+    for feature in expected_features:
+        if feature.startswith(prefix):
+            values.append(feature[len(prefix):])
+
+    return sorted(values)
+
+
+# ---------------------------------------------------------
+# BUILD MODEL INPUT FROM USER VALUES
+# ---------------------------------------------------------
+def build_model_input(values):
+    # Start with all model features set to zero
+    row = {feature: 0 for feature in expected_features}
+
+    # Numeric columns
+    for feature in numeric_features:
+        if feature in expected_features and feature in values:
+            row[feature] = values[feature]
+
+    # Categorical columns
+    for feature in categorical_bases:
+        if feature not in values:
+            continue
+
+        category = str(values[feature])
+        dummy_name = f"{feature}_{category}"
+
+        if dummy_name in row:
+            row[dummy_name] = 1
+
+    return pd.DataFrame([row], columns=expected_features)
+
+
+# ---------------------------------------------------------
+# CONVERT BATCH DATA TO MODEL FEATURES
+# ---------------------------------------------------------
+def prepare_batch_for_model(df):
+    df = df.copy()
+
+    # Fix Distance column if CSV has no trailing space
+    if "Distance" in df.columns and "Distance " not in df.columns:
+        df = df.rename(columns={"Distance": "Distance "})
+
+    # Remove target if present
+    if "Price" in df.columns:
+        df = df.drop(columns=["Price"])
+
+    output = pd.DataFrame(
+        0,
+        index=df.index,
+        columns=expected_features
     )
 
-# -----------------------------
-# SIDEBAR
-# -----------------------------
-st.sidebar.header("Car Details")
+    # Numeric columns
+    for feature in numeric_features:
+        if feature in df.columns and feature in output.columns:
+            output[feature] = pd.to_numeric(
+                df[feature],
+                errors="coerce"
+            ).fillna(0)
 
-maker = st.sidebar.selectbox(
-    "Maker",
-    sorted(train["Maker"].dropna().astype(str).unique())
+    # Categorical columns
+    for feature in categorical_bases:
+        if feature not in df.columns:
+            continue
+
+        for idx, value in df[feature].items():
+            dummy_name = f"{feature}_{value}"
+
+            if dummy_name in output.columns:
+                output.loc[idx, dummy_name] = 1
+
+    return output
+
+
+# ---------------------------------------------------------
+# TITLE
+# ---------------------------------------------------------
+st.title("🚗 Indian Pre-Owned Car Price Prediction")
+st.write(
+    "Use machine learning to estimate the market price of a pre-owned car."
 )
 
-maker_models = sorted(
-    train.loc[
-        train["Maker"].astype(str) == maker,
-        "model"
-    ].dropna().astype(str).unique()
-)
-
-model_name = st.sidebar.selectbox("Model", maker_models)
-
-location = st.sidebar.selectbox(
-    "Location",
-    sorted(train["Location"].dropna().astype(str).unique())
-)
-
-owner_type = st.sidebar.selectbox(
-    "Owner Type",
-    sorted(train["Owner Type"].dropna().astype(str).unique())
-)
-
-fuel_type = st.sidebar.selectbox(
-    "Fuel Type",
-    sorted(train["fuel_type"].dropna().astype(str).unique())
-)
-
-transmission = st.sidebar.selectbox(
-    "Transmission",
-    sorted(train["transmission"].dropna().astype(str).unique())
-)
-
-body_type = st.sidebar.selectbox(
-    "Body Type",
-    sorted(train["body_type"].dropna().astype(str).unique())
-)
-
-distance_default = float(
-    train[DISTANCE_COL].median()
-    if DISTANCE_COL in train.columns
-    else train["Distance"].median()
-)
-
-distance = st.sidebar.number_input(
-    "Distance driven (km)",
-    min_value=0.0,
-    max_value=20_000_000.0,
-    value=distance_default,
-    step=1000.0
-)
-
-age = st.sidebar.number_input(
-    "Age of car",
-    min_value=0,
-    max_value=100,
-    value=int(train["Age of car"].median()),
-    step=1
-)
-
-manufacture_year = st.sidebar.number_input(
-    "Manufacture year",
-    min_value=1900,
-    max_value=2100,
-    value=int(train["manufacture_year"].median()),
-    step=1
-)
-
-engine_displacement = st.sidebar.number_input(
-    "Engine displacement",
-    min_value=0,
-    max_value=100000,
-    value=int(train["engine_displacement"].median()),
-    step=50
-)
-
-engine_power = st.sidebar.number_input(
-    "Engine power",
-    min_value=0.0,
-    max_value=2000.0,
-    value=float(train["engine_power"].median()),
-    step=1.0
-)
-
-vroom_rating = st.sidebar.number_input(
-    "Vroom Audit Rating",
-    min_value=int(train["Vroom Audit Rating"].min()),
-    max_value=int(train["Vroom Audit Rating"].max()),
-    value=int(train["Vroom Audit Rating"].median()),
-    step=1
-)
-
-door_count = st.sidebar.number_input(
-    "Door count",
-    min_value=1,
-    max_value=10,
-    value=int(train["door_count"].median()),
-    step=1
-)
-
-seat_count = st.sidebar.number_input(
-    "Seat count",
-    min_value=1,
-    max_value=20,
-    value=int(train["seat_count"].median()),
-    step=1
-)
-
-values = {
-    "Maker": maker,
-    "model": model_name,
-    "Location": location,
-    DISTANCE_COL: distance,
-    "Owner Type": owner_type,
-    "manufacture_year": manufacture_year,
-    "Age of car": age,
-    "engine_displacement": engine_displacement,
-    "engine_power": engine_power,
-    "body_type": body_type,
-    "Vroom Audit Rating": vroom_rating,
-    "transmission": transmission,
-    "door_count": door_count,
-    "seat_count": seat_count,
-    "fuel_type": fuel_type,
-}
-
+# ---------------------------------------------------------
+# TABS
+# ---------------------------------------------------------
 tab1, tab2, tab3 = st.tabs(
-    ["🎯 Price Prediction", "📁 Batch Prediction", "📊 Insights"]
+    [
+        "🎯 Price Prediction",
+        "📁 Batch Prediction",
+        "📊 Model Insights"
+    ]
 )
 
+# =========================================================
+# TAB 1 - PRICE PREDICTION
+# =========================================================
 with tab1:
-    st.subheader("Selected Car")
 
-    a, b, c = st.columns(3)
-    a.metric("Maker", maker.title())
-    b.metric("Model", model_name.title())
-    c.metric("Location", location)
+    st.subheader("Enter Car Details")
+
+    col1, col2, col3 = st.columns(3)
+
+    # Maker
+    maker_options = get_categories("Maker")
+    with col1:
+        maker = st.selectbox(
+            "Maker",
+            maker_options if maker_options else ["Unknown"]
+        )
+
+    # Model
+    model_options = get_categories("model")
+    with col2:
+        model_name = st.selectbox(
+            "Model",
+            model_options if model_options else ["Unknown"]
+        )
+
+    # Location
+    location_options = get_categories("Location")
+    with col3:
+        location = st.selectbox(
+            "Location",
+            location_options if location_options else ["Unknown"]
+        )
+
+    col4, col5, col6 = st.columns(3)
+
+    with col4:
+        owner_options = get_categories("Owner Type")
+        owner_type = st.selectbox(
+            "Owner Type",
+            owner_options if owner_options else ["Unknown"]
+        )
+
+    with col5:
+        fuel_options = get_categories("fuel_type")
+        fuel_type = st.selectbox(
+            "Fuel Type",
+            fuel_options if fuel_options else ["Unknown"]
+        )
+
+    with col6:
+        transmission_options = get_categories("transmission")
+        transmission = st.selectbox(
+            "Transmission",
+            transmission_options if transmission_options else ["Unknown"]
+        )
+
+    col7, col8, col9 = st.columns(3)
+
+    with col7:
+        body_options = get_categories("body_type")
+        body_type = st.selectbox(
+            "Body Type",
+            body_options if body_options else ["Unknown"]
+        )
+
+    with col8:
+        distance = st.number_input(
+            "Distance driven (km)",
+            min_value=0.0,
+            value=65000.0,
+            step=1000.0
+        )
+
+    with col9:
+        age = st.number_input(
+            "Age of car (years)",
+            min_value=0,
+            max_value=50,
+            value=5,
+            step=1
+        )
+
+    col10, col11, col12 = st.columns(3)
+
+    with col10:
+        manufacture_year = st.number_input(
+            "Manufacture year",
+            min_value=1900,
+            max_value=2100,
+            value=2020,
+            step=1
+        )
+
+    with col11:
+        engine_displacement = st.number_input(
+            "Engine displacement",
+            min_value=0.0,
+            value=1896.0,
+            step=50.0
+        )
+
+    with col12:
+        engine_power = st.number_input(
+            "Engine power",
+            min_value=0.0,
+            value=91.0,
+            step=1.0
+        )
+
+    col13, col14, col15 = st.columns(3)
+
+    with col13:
+        vroom_rating = st.number_input(
+            "Vroom Audit Rating",
+            min_value=0,
+            value=6,
+            step=1
+        )
+
+    with col14:
+        door_count = st.number_input(
+            "Door Count",
+            min_value=1,
+            max_value=10,
+            value=4,
+            step=1
+        )
+
+    with col15:
+        seat_count = st.number_input(
+            "Seat Count",
+            min_value=1,
+            max_value=20,
+            value=5,
+            step=1
+        )
+
+    st.divider()
 
     if st.button(
         "🔮 Predict Price",
         type="primary",
         use_container_width=True
     ):
-        if model is None:
-            st.error("Model file not found.")
-        else:
-            try:
-                input_df = build_input_row(train, values)
-                model_input = prepare_for_model(input_df, model)
 
-                prediction = float(
-                    model.predict(model_input)[0]
-                )
+        values = {
+            "ID": 0,
+            "Maker": maker,
+            "model": model_name,
+            "Location": location,
+            "Distance ": distance,
+            "Owner Type": owner_type,
+            "manufacture_year": manufacture_year,
+            "Age of car": age,
+            "engine_displacement": engine_displacement,
+            "engine_power": engine_power,
+            "body_type": body_type,
+            "Vroom Audit Rating": vroom_rating,
+            "transmission": transmission,
+            "door_count": door_count,
+            "seat_count": seat_count,
+            "fuel_type": fuel_type
+        }
 
-                low = prediction * 0.95
-                high = prediction * 1.05
+        try:
+            model_input = build_model_input(values)
 
-                st.success("Prediction completed!")
+            prediction = float(
+                model.predict(model_input)[0]
+            )
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric(
-                    "Estimated Price",
-                    f"₹{prediction:,.0f}"
-                )
-                c2.metric(
-                    "5% Lower Range",
-                    f"₹{low:,.0f}"
-                )
-                c3.metric(
-                    "5% Upper Range",
-                    f"₹{high:,.0f}"
-                )
+            lower = prediction * 0.95
+            upper = prediction * 1.05
 
-            except Exception as e:
-                st.error(f"Prediction failed: {e}")
+            st.success("Prediction completed successfully!")
 
-                if hasattr(model, "feature_names_in_"):
-                    st.write(
-                        "Model expects these features:"
-                    )
-                    st.code(
-                        "\n".join(
-                            list(model.feature_names_in_)
-                        )
-                    )
+            c1, c2, c3 = st.columns(3)
 
+            c1.metric(
+                "Estimated Price",
+                f"₹{prediction:,.0f}"
+            )
+
+            c2.metric(
+                "5% Lower Range",
+                f"₹{lower:,.0f}"
+            )
+
+            c3.metric(
+                "5% Upper Range",
+                f"₹{upper:,.0f}"
+            )
+
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")
+
+
+# =========================================================
+# TAB 2 - BATCH PREDICTION
+# =========================================================
 with tab2:
+
     st.subheader("Batch Prediction")
 
     uploaded_file = st.file_uploader(
-        "Upload test CSV",
+        "Upload Test CSV",
         type=["csv"]
     )
 
     if uploaded_file is not None:
+
         try:
             batch = pd.read_csv(uploaded_file)
 
+            st.write("Uploaded Data")
             st.dataframe(
-                batch.head(),
+                batch.head(10),
                 use_container_width=True
             )
 
-            if model is None:
-                st.error("Model file not found.")
-            else:
-                model_input = prepare_for_model(
-                    batch,
-                    model
-                )
+            model_input = prepare_batch_for_model(batch)
 
-                predictions = model.predict(
-                    model_input
-                )
+            predictions = model.predict(model_input)
 
-                output = batch.copy()
-                output[TARGET] = predictions
+            result = batch.copy()
+            result["Price"] = predictions
 
-                if "ID" in output.columns:
-                    output = output[["ID", TARGET]]
+            if "ID" in result.columns:
+                result = result[["ID", "Price"]]
 
-                st.success(
-                    f"Predicted {len(output)} rows."
-                )
+            st.success(
+                f"Predicted {len(result):,} rows successfully."
+            )
 
-                st.dataframe(
-                    output.head(20),
-                    use_container_width=True
-                )
+            st.dataframe(
+                result.head(20),
+                use_container_width=True
+            )
 
-                st.download_button(
-                    "⬇️ Download Predictions",
-                    output.to_csv(index=False).encode("utf-8"),
-                    file_name="car_price_predictions.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+            csv_data = result.to_csv(
+                index=False
+            ).encode("utf-8")
+
+            st.download_button(
+                "⬇️ Download Predictions",
+                data=csv_data,
+                file_name="predictions.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
         except Exception as e:
-            st.error(f"Batch prediction failed: {e}")
+            st.error(
+                f"Batch prediction failed: {e}"
+            )
 
+
+# =========================================================
+# TAB 3 - MODEL INSIGHTS
+# =========================================================
 with tab3:
-    st.subheader("Dataset Insights")
 
-    age_price = (
-        train.groupby("Age of car")["Price"]
-        .mean()
-        .sort_index()
+    st.subheader("Model Insights")
+
+    st.write(
+        "This deployed version derives the available categorical "
+        "options directly from the trained model."
     )
 
-    maker_price = (
-        train.groupby("Maker")["Price"]
-        .mean()
-        .sort_values(ascending=False)
-    )
+    st.write("### Model Information")
 
-    col1, col2 = st.columns(2)
+    info1, info2 = st.columns(2)
 
-    with col1:
-        st.write("Average Price by Car Age")
-        st.line_chart(age_price)
+    with info1:
+        st.metric(
+            "Number of Model Features",
+            len(expected_features)
+        )
 
-    with col2:
-        st.write("Average Price by Maker")
-        st.bar_chart(maker_price)
+    with info2:
+        st.metric(
+            "Number of Categorical Fields",
+            len(categorical_bases)
+        )
 
-    st.write("Training Data")
-    st.dataframe(
-        train.head(20),
-        use_container_width=True
-    )
+    st.write("### Available Categories")
 
+    for feature in categorical_bases:
+        categories = get_categories(feature)
+
+        if categories:
+            st.write(
+                f"**{feature}:** {len(categories)} categories"
+            )
+
+    st.write("### Model Feature Names")
+
+    with st.expander("Show model features"):
+        st.code(
+            "\n".join(expected_features)
+        )
+
+# ---------------------------------------------------------
+# FOOTER
+# ---------------------------------------------------------
 st.sidebar.divider()
 st.sidebar.caption(
     "Indian Pre-Owned Car Price Prediction"
