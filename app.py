@@ -13,7 +13,7 @@ st.set_page_config(
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / "models" / "car_price_model.pkl"
 PIPELINE_PATH = ROOT / "models" / "car_price_pipeline.pkl"
-TRAIN_PATH = ROOT / "data" / "Cap_Training_Data_2025.csv"
+TRAIN_PATH = ROOT / "Cap_Training_Data_2025.csv"
 
 TARGET = "Price"
 DISTANCE_COL = "Distance "
@@ -117,8 +117,8 @@ model = load_model()
 train = load_training_data()
 
 if train is None:
-    st.error("Training CSV not found.")
-    st.code("data/Cap_Training_Data_2025.csv")
+    st.error( "Training CSV not found.")
+    st.code("Cap_Training_Data_2025.csv")
     st.stop()
 
 if model is None:
