@@ -10,7 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents
 MODEL_PATH = ROOT / "models" / "car_price_model.pkl"
 PIPELINE_PATH = ROOT / "models" / "car_price_pipeline.pkl"
 TRAIN_PATH = ROOT / "data" / "Cap_Training_Data_2025.csv"
