@@ -23,12 +23,10 @@ DISTANCE_COL = "Distance "
 
 @st.cache_resource
 def load_model():
-    # Prefer the pipeline if one exists; otherwise use the existing model.
-    if PIPELINE_PATH.exists():
-        return joblib.load(PIPELINE_PATH)
-    if MODEL_PATH.exists():
-        return joblib.load(MODEL_PATH)
-    return None
+    if not MODEL_PATH.exists():
+        return None
+
+    return joblib.load(MODEL_PATH)
 
 
 @st.cache_data
