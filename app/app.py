@@ -24,8 +24,8 @@ st.set_page_config(
 # └── README.md
 
 ROOT = Path(__file__).resolve().parent
-MODEL_PATH = ROOT / "car_price_model.pkl"
-TRAIN_PATH = ROOT / "Cap_Training_Data_2025.csv"
+MODEL_PATH = ROOT /"model"/ "car_price_model.pkl"
+TRAIN_PATH = ROOT / "data"/"Cap_Training_Data_2025.csv"
 
 TARGET = "Price"
 DISTANCE_COL = "Distance "
